@@ -205,6 +205,59 @@ flex-direction: column;
 margin-left: 0;
 }
 }
+
+.reset-zone {
+background: var(--card-bg);
+border: 1px dashed var(--danger);
+border-radius: 8px;
+padding: 14px 16px;
+margin: 24px 0;
+}
+
+.reset-zone .export-status {
+font-size: 0.8rem;
+color: var(--subtext);
+margin-bottom: 10px;
+}
+
+.clear-all-btn {
+background: transparent;
+color: var(--danger);
+border: 1px solid var(--danger);
+width: 100%;
+}
+
+.reset-confirm {
+display: none;
+margin-top: 10px;
+gap: 8px;
+flex-direction: column;
+}
+
+.reset-confirm input {
+width: 100%;
+padding: 8px;
+border: 1px solid var(--border);
+border-radius: 4px;
+box-sizing: border-box;
+}
+
+.reset-confirm-actions {
+display: flex;
+gap: 8px;
+}
+
+.reset-confirm-actions button {
+flex: 1;
+}
+
+.confirm-clear-btn {
+background: var(--danger);
+}
+
+.cancel-clear-btn {
+background: #475569;
+}
 </style>
 </head>
 <body>
@@ -237,6 +290,19 @@ margin-left: 0;
 </div>
 
 <input type="text" id="searchInput" class="search-box" placeholder="🔍 Search text notes...">
+
+<div class="reset-zone">
+<div class="export-status" id="exportStatus">Not exported yet</div>
+<button id="clearAllBtn" class="clear-all-btn">🗑️ Clear All &amp; Start Fresh</button>
+<div class="reset-confirm" id="resetConfirm">
+<span style="font-size:0.8rem;color:var(--subtext);">Make sure today's entries are exported and safely shared first. Type <strong>CLEAR</strong> below to permanently delete all entries.</span>
+<input type="text" id="clearConfirmInput" placeholder="Type CLEAR to confirm" autocomplete="off">
+<div class="reset-confirm-actions">
+<button id="confirmClearBtn" class="confirm-clear-btn" disabled>Delete Everything</button>
+<button id="cancelClearBtn" class="cancel-clear-btn">Cancel</button>
+</div>
+</div>
+</div>
 
 <div id="diaryContainer"></div>
 
@@ -590,6 +656,7 @@ async function exportZip() {
           title: 'Field Diary Export',
           text: 'Field diary export'
         });
+        recordExport();
         btn.innerText = originalText;
         btn.disabled = false;
         return;
@@ -602,6 +669,7 @@ async function exportZip() {
     a.href = URL.createObjectURL(content);
     a.download = fileName;
     a.click();
+    recordExport();
   } catch (err) {
     alert("Failed to export ZIP file.");
     console.error(err);
@@ -609,6 +677,29 @@ async function exportZip() {
     btn.innerText = originalText;
     btn.disabled = false;
   }
+}
+
+// Records that an export happened, so the Clear All confirmation can show
+// whoever's about to wipe entries when they last actually exported. This
+// can't guarantee the file was successfully shared/saved elsewhere (a
+// download can still fail silently after the browser hands it off), only
+// that the app produced and offered one — treat it as a helpful reminder,
+// not a guarantee.
+function recordExport() {
+  localStorage.setItem('fieldDiaryLastExport', new Date().toISOString());
+  updateExportStatus();
+}
+
+function updateExportStatus() {
+  const el = document.getElementById('exportStatus');
+  if (!el) return;
+  const last = localStorage.getItem('fieldDiaryLastExport');
+  if (!last) {
+    el.innerText = 'Not exported yet';
+    return;
+  }
+  const d = new Date(last);
+  el.innerText = `Last exported: ${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
 }
 
 function updateConnectionStatus() {
@@ -627,11 +718,49 @@ document.addEventListener('DOMContentLoaded', () => {
   loadFromStorage();
   renderDiary();
   updateConnectionStatus();
+  updateExportStatus();
 
   document.getElementById('addTextBtn').addEventListener('click', addTextNote);
   document.getElementById('imageInput').addEventListener('change', addPhoto);
   document.getElementById('recordBtn').addEventListener('click', toggleAudioRecording);
   document.getElementById('exportBtn').addEventListener('click', exportZip);
+
+  // Clear All / Start Fresh — deliberately harder to trigger than a normal
+  // button. Reveals a typed-confirmation panel rather than acting on the
+  // first tap, since this wipes every entry and can't be undone.
+  const clearAllBtn = document.getElementById('clearAllBtn');
+  const resetConfirm = document.getElementById('resetConfirm');
+  const clearConfirmInput = document.getElementById('clearConfirmInput');
+  const confirmClearBtn = document.getElementById('confirmClearBtn');
+  const cancelClearBtn = document.getElementById('cancelClearBtn');
+
+  clearAllBtn.addEventListener('click', () => {
+    resetConfirm.style.display = 'flex';
+    clearAllBtn.style.display = 'none';
+    clearConfirmInput.value = '';
+    confirmClearBtn.disabled = true;
+    clearConfirmInput.focus();
+  });
+
+  clearConfirmInput.addEventListener('input', () => {
+    confirmClearBtn.disabled = clearConfirmInput.value.trim() !== 'CLEAR';
+  });
+
+  cancelClearBtn.addEventListener('click', () => {
+    resetConfirm.style.display = 'none';
+    clearAllBtn.style.display = 'inline-flex';
+    clearConfirmInput.value = '';
+  });
+
+  confirmClearBtn.addEventListener('click', () => {
+    if (clearConfirmInput.value.trim() !== 'CLEAR') return;
+    entries = [];
+    saveToStorage();
+    renderDiary();
+    resetConfirm.style.display = 'none';
+    clearAllBtn.style.display = 'inline-flex';
+    clearConfirmInput.value = '';
+  });
 
   document.getElementById('noteInput').addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 'Enter') {
