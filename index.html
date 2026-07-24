@@ -11,8 +11,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Field Diary">
-<!-- JSZip Library for creating ZIP files directly in the browser -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 :root {
 --bg: #f4f6f8;
@@ -234,7 +232,7 @@ margin-left: 0;
 </label>
 
 <button id="recordBtn">🎙️ Record Audio</button>
-<button id="exportBtn" class="export-btn">📦 Export as ZIP</button>
+<button id="exportBtn" class="export-btn">📄 Export Diary</button>
 </div>
 </div>
 
@@ -323,6 +321,39 @@ function updateCharCount() {
   document.getElementById('charCount').innerText = `${input.value.length} chars`;
 }
 
+const PHOTO_MAX_DIMENSION = 1280; // longest edge, px
+const PHOTO_QUALITY = 0.7; // JPEG quality 0-1
+
+// Resizes/re-compresses a captured photo through a canvas before it's
+// stored, so entries and exports stay small enough to actually share
+// over a slow reconnection later. Raw phone-camera shots (2-5MB+) come
+// out at roughly 150-400KB after this.
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = (e) => { img.src = e.target.result; };
+    reader.onerror = reject;
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > height && width > PHOTO_MAX_DIMENSION) {
+        height = Math.round(height * (PHOTO_MAX_DIMENSION / width));
+        width = PHOTO_MAX_DIMENSION;
+      } else if (height > PHOTO_MAX_DIMENSION) {
+        width = Math.round(width * (PHOTO_MAX_DIMENSION / height));
+        height = PHOTO_MAX_DIMENSION;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', PHOTO_QUALITY));
+    };
+    img.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 function addPhoto(event) {
   const file = event.target.files[0];
   if (file) {
@@ -331,12 +362,15 @@ function addPhoto(event) {
       event.target.value = '';
       return;
     }
-    const reader = new FileReader();
-    reader.onload = function(e) {
-      saveEntry('image', e.target.result);
-      event.target.value = '';
-    };
-    reader.readAsDataURL(file);
+    compressImage(file)
+      .then((dataUrl) => {
+        saveEntry('image', dataUrl);
+        event.target.value = '';
+      })
+      .catch(() => {
+        alert('Could not process that photo.');
+        event.target.value = '';
+      });
   }
 }
 
@@ -452,86 +486,80 @@ function renderDiary() {
   }
 }
 
-function dataURLtoBlob(dataURL) {
-  const parts = dataURL.split(',');
-  const mimeMatch = parts[0].match(/:(.*?);/);
-  const mime = mimeMatch ? mimeMatch[1] : '';
-  const binary = atob(parts[1]);
-  const arr = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
-  return new Blob([arr], { type: mime });
-}
-
-function extensionForMime(mime) {
-  if (mime.includes('png')) return 'png';
-  if (mime.includes('webm')) return 'webm';
-  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
-  if (mime.includes('gif')) return 'gif';
-  return 'bin';
-}
-
-async function buildZipBlob() {
-  const zip = new JSZip();
-  const mediaFolder = zip.folder("media");
+// Builds ONE self-contained HTML file — photos and audio stay embedded as
+// base64 data URLs (same as they're stored in the app), and the layout
+// reuses the app's own timeline styling, so opening the export looks and
+// feels like the app itself rather than a stripped-down log. Nothing to
+// keep track of separately, nothing that breaks if a media folder gets
+// left behind when the file is shared.
+function buildStandaloneHTML() {
   const exportDate = getTimestamp();
+  const grouped = groupByDate(entries);
 
-  let entriesHTML = '';
+  let bodyHTML = '';
+  for (const [date, dateEntries] of Object.entries(grouped)) {
+    bodyHTML += `<div class="date-group-title">${escapeHTML(date)}</div>\n`;
+    dateEntries.forEach((entry) => {
+      let contentHTML = '';
+      if (entry.type === 'text') {
+        contentHTML = `<p style="margin:0;">${escapeHTML(entry.data)}</p>`;
+      } else if (entry.type === 'image') {
+        contentHTML = `<img src="${entry.data}" alt="Diary photo">`;
+      } else if (entry.type === 'audio') {
+        contentHTML = `<audio controls src="${entry.data}"></audio>`;
+      }
+      const timeOnly = entry.timestamp.split('|')[1] ? entry.timestamp.split('|')[1].trim() : entry.timestamp;
+      bodyHTML += `
+        <div class="timeline-entry">
+          <div class="entry-header">
+            <span class="timestamp">${escapeHTML(timeOnly)}</span>
+          </div>
+          <div class="entry-content">${contentHTML}</div>
+        </div>
+        <hr class="separator">
+      `;
+    });
+  }
 
-  entries.forEach((entry, i) => {
-    let mediaTag = '';
-
-    if (entry.type === 'text') {
-      mediaTag = `<p>${escapeHTML(entry.data)}</p>`;
-    } else if (entry.type === 'image') {
-      const blob = dataURLtoBlob(entry.data);
-      const ext = extensionForMime(blob.type);
-      const fileName = `image_${i}_${entry.id}.${ext}`;
-      mediaFolder.file(fileName, blob);
-      mediaTag = `<img src="media/${fileName}" alt="Photo">`;
-    } else if (entry.type === 'audio') {
-      const blob = dataURLtoBlob(entry.data);
-      const ext = extensionForMime(blob.type);
-      const fileName = `audio_${i}_${entry.id}.${ext}`;
-      mediaFolder.file(fileName, blob);
-      mediaTag = `<audio controls src="media/${fileName}"></audio>`;
-    }
-
-    entriesHTML += `
-      <div class="entry">
-        <div class="time">${escapeHTML(entry.timestamp)}</div>
-        ${mediaTag}
-      </div>
-      <hr>
-    `;
-  });
-
-  const fullHTML = `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Exported Field Diary</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Field Diary — Exported ${escapeHTML(exportDate)}</title>
 <style>
-body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 30px auto; padding: 0 15px; color: #222; }
-h2 { margin-bottom: 4px; }
-.meta { font-size: 0.85em; color: #666; margin-bottom: 24px; }
-.entry { margin-bottom: 15px; }
-.time { font-size: 0.8em; color: #475569; font-weight: bold; margin-bottom: 6px; }
-img { max-width: 100%; border-radius: 6px; }
-audio { width: 100%; }
-hr { border: 0; height: 1px; background: #e2e8f0; margin: 20px 0; }
+:root {
+  --bg: #f4f6f8; --card-bg: #ffffff; --text: #222222;
+  --primary: #2563eb; --border: #e2e8f0; --subtext: #64748b;
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--text);
+  max-width: 680px; margin: 0 auto; padding: 16px;
+}
+h1 { font-size: 1.5rem; margin-bottom: 4px; }
+.meta { font-size: 0.85rem; color: var(--subtext); margin-bottom: 20px; }
+.date-group-title {
+  font-size: 1rem; font-weight: bold; color: var(--subtext);
+  margin: 20px 0 10px 0; border-bottom: 2px solid var(--border); padding-bottom: 4px;
+}
+.timeline-entry {
+  background: var(--card-bg); padding: 12px 16px; border-radius: 6px;
+  border-left: 4px solid var(--primary); margin-bottom: 12px;
+}
+.entry-header { margin-bottom: 6px; }
+.timestamp { font-size: 0.8rem; font-weight: bold; color: var(--subtext); }
+.entry-content img { max-width: 100%; border-radius: 6px; margin-top: 8px; }
+.entry-content audio { width: 100%; margin-top: 8px; }
+hr.separator { border: 0; height: 1px; background: var(--border); margin: 16px 0; }
 </style>
 </head>
 <body>
-<h2>Field Diary Log</h2>
-<div class="meta">Exported on: ${exportDate} | Total Entries: ${entries.length}</div>
-<hr>
-${entriesHTML}
+<h1>Field Diary</h1>
+<div class="meta">Exported ${escapeHTML(exportDate)} · ${entries.length} entries</div>
+${bodyHTML}
 </body>
 </html>`;
-
-  zip.file("index.html", fullHTML);
-
-  return zip.generateAsync({ type: "blob" });
 }
 
 async function exportZip() {
@@ -546,9 +574,10 @@ async function exportZip() {
   btn.disabled = true;
 
   try {
-    const content = await buildZipBlob();
-    const fileName = `Diary_Export_${Date.now()}.zip`;
-    const file = new File([content], fileName, { type: 'application/zip' });
+    const html = buildStandaloneHTML();
+    const content = new Blob([html], { type: 'text/html' });
+    const fileName = `Diary_Export_${Date.now()}.html`;
+    const file = new File([content], fileName, { type: 'text/html' });
 
     // If the device supports sharing files directly (typical once back
     // online / near other people), offer the native share sheet so it can
@@ -636,8 +665,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('installBtn').style.display = 'none';
   });
 
-  // Register the service worker so the app shell (and JSZip) is cached
-  // for full offline use after the first successful load.
+  // Register the service worker so the app shell is cached for full
+  // offline use after the first successful load.
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch((err) => {
       console.error('Service worker registration failed:', err);

@@ -1,11 +1,10 @@
-const CACHE_NAME = 'field-diary-v1';
+const CACHE_NAME = 'field-diary-v2';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png',
-  'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'
+  './icon-512.png'
 ];
 
 // Cache the app shell the first time this runs (needs one online load to seed).
