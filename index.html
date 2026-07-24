@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Offline Field Diary</title>
+<meta name="theme-color" content="#2563eb">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Field Diary">
+<!-- JSZip Library for creating ZIP files directly in the browser -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+:root {
+--bg: #f4f6f8;
+--card-bg: #ffffff;
+--text: #222222;
+--primary: #2563eb;
+--accent: #16a34a;
+--danger: #dc2626;
+--border: #e2e8f0;
+--subtext: #64748b;
+}
+
+body {
+font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+background: var(--bg);
+color: var(--text);
+max-width: 680px;
+margin: 0 auto;
+padding: 16px;
+}
+
+h1 {
+font-size: 1.5rem;
+margin-bottom: 4px;
+}
+
+.status-bar {
+display: flex;
+align-items: center;
+gap: 8px;
+font-size: 0.8rem;
+color: var(--subtext);
+margin-bottom: 12px;
+}
+
+.status-dot {
+width: 8px;
+height: 8px;
+border-radius: 50%;
+background: var(--danger);
+}
+
+.status-dot.online { background: var(--accent); }
+
+#installBtn {
+display: none;
+margin-bottom: 12px;
+width: 100%;
+background: #475569;
+}
+
+.controls {
+background: var(--card-bg);
+padding: 16px;
+border-radius: 8px;
+border: 1px solid var(--border);
+margin-bottom: 16px;
+display: flex;
+flex-direction: column;
+gap: 8px;
+}
+
+.textarea-wrapper {
+position: relative;
+}
+
+textarea {
+width: 100%;
+height: 80px;
+padding: 8px;
+border: 1px solid var(--border);
+border-radius: 4px;
+box-sizing: border-box;
+resize: vertical;
+font-family: inherit;
+}
+
+.char-count {
+font-size: 0.75rem;
+color: var(--subtext);
+text-align: right;
+margin-top: 2px;
+}
+
+.media-inputs {
+display: flex;
+gap: 8px;
+flex-wrap: wrap;
+}
+
+button, label.file-btn {
+background: var(--primary);
+color: white;
+border: none;
+padding: 8px 14px;
+border-radius: 4px;
+cursor: pointer;
+font-weight: 500;
+font-size: 0.9rem;
+display: inline-flex;
+align-items: center;
+justify-content: center;
+}
+
+button:disabled {
+opacity: 0.6;
+cursor: not-allowed;
+}
+
+label.file-btn {
+background: #475569;
+}
+
+input[type="file"] {
+display: none;
+}
+
+.export-btn {
+background: var(--accent);
+margin-left: auto;
+}
+
+.search-box {
+width: 100%;
+padding: 8px 12px;
+border: 1px solid var(--border);
+border-radius: 6px;
+margin-bottom: 20px;
+box-sizing: border-box;
+}
+
+.date-group-title {
+font-size: 1rem;
+font-weight: bold;
+color: var(--subtext);
+margin: 20px 0 10px 0;
+border-bottom: 2px solid var(--border);
+padding-bottom: 4px;
+}
+
+.timeline-entry {
+background: var(--card-bg);
+padding: 12px 16px;
+border-radius: 6px;
+border-left: 4px solid var(--primary);
+margin-bottom: 12px;
+}
+
+.entry-header {
+display: flex;
+justify-content: space-between;
+align-items: center;
+margin-bottom: 6px;
+}
+
+.timestamp {
+font-size: 0.8rem;
+font-weight: bold;
+color: var(--subtext);
+}
+
+.delete-btn {
+background: transparent;
+color: var(--danger);
+padding: 2px 6px;
+font-size: 0.8rem;
+}
+
+.entry-content img {
+max-width: 100%;
+border-radius: 6px;
+margin-top: 8px;
+}
+
+.entry-content audio {
+width: 100%;
+margin-top: 8px;
+}
+
+hr.separator {
+border: 0;
+height: 1px;
+background: var(--border);
+margin: 16px 0;
+}
+
+@media (max-width: 480px) {
+.media-inputs {
+flex-direction: column;
+}
+.export-btn {
+margin-left: 0;
+}
+}
+</style>
+</head>
+<body>
+
+<h1>Offline Field Diary</h1>
+<div class="status-bar">
+<span class="status-dot" id="statusDot"></span>
+<span id="statusText">Checking connection…</span>
+</div>
+
+<button id="installBtn">⬇️ Install app to home screen</button>
+
+<div class="controls">
+<div class="textarea-wrapper">
+<textarea id="noteInput" placeholder="Write a note... (Ctrl+Enter to submit)"></textarea>
+<div id="charCount" class="char-count">0 chars</div>
+</div>
+
+<div class="media-inputs">
+<button id="addTextBtn">Add Text</button>
+
+<label class="file-btn">
+📷 Photo
+<input type="file" id="imageInput" accept="image/*" capture="environment">
+</label>
+
+<button id="recordBtn">🎙️ Record Audio</button>
+<button id="exportBtn" class="export-btn">📦 Export as ZIP</button>
+</div>
+</div>
+
+<input type="text" id="searchInput" class="search-box" placeholder="🔍 Search text notes...">
+
+<div id="diaryContainer"></div>
+
+<script>
+let entries = [];
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let deferredInstallPrompt = null;
+
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB limit
+
+function escapeHTML(str) {
+  if (!str) return '';
+  return str.replace(/[&<>"']/g, function(m) {
+    switch (m) {
+      case '&': return '&amp;';
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '"': return '&quot;';
+      case "'": return '&#39;';
+      default: return m;
+    }
+  });
+}
+
+function getTimestamp() {
+  const now = new Date();
+  return now.toLocaleDateString() + ' | ' + now.toLocaleTimeString();
+}
+
+function saveToStorage() {
+  try {
+    localStorage.setItem('fieldDiaryEntries', JSON.stringify(entries));
+  } catch (e) {
+    alert("Warning: Local storage full. Entry added, but won't persist across refresh.");
+  }
+}
+
+function loadFromStorage() {
+  const saved = localStorage.getItem('fieldDiaryEntries');
+  if (saved) {
+    try {
+      entries = JSON.parse(saved);
+    } catch (e) {
+      console.error("Error loading saved diary entries", e);
+    }
+  }
+}
+
+function saveEntry(type, data) {
+  const entry = {
+    id: Date.now(),
+    timestamp: getTimestamp(),
+    type: type,
+    data: data
+  };
+  entries.push(entry);
+  saveToStorage();
+  renderDiary();
+}
+
+function deleteEntry(id) {
+  if (confirm("Delete this entry?")) {
+    entries = entries.filter(e => e.id !== id);
+    saveToStorage();
+    renderDiary();
+  }
+}
+
+function addTextNote() {
+  const input = document.getElementById('noteInput');
+  if (input.value.trim() !== '') {
+    saveEntry('text', input.value.trim());
+    input.value = '';
+    updateCharCount();
+  }
+}
+
+function updateCharCount() {
+  const input = document.getElementById('noteInput');
+  document.getElementById('charCount').innerText = `${input.value.length} chars`;
+}
+
+function addPhoto(event) {
+  const file = event.target.files[0];
+  if (file) {
+    if (file.size > MAX_FILE_SIZE) {
+      alert('Photo is too large! Maximum size is 5MB.');
+      event.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      saveEntry('image', e.target.result);
+      event.target.value = '';
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
+async function toggleAudioRecording() {
+  const recordBtn = document.getElementById('recordBtn');
+  if (!isRecording) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorder = new MediaRecorder(stream);
+      audioChunks = [];
+
+      mediaRecorder.ondataavailable = event => audioChunks.push(event.data);
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach(track => track.stop());
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        audioChunks = [];
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          saveEntry('audio', e.target.result);
+        };
+        reader.readAsDataURL(audioBlob);
+      };
+
+      mediaRecorder.start();
+      isRecording = true;
+      recordBtn.innerText = "🛑 Stop Recording";
+      recordBtn.style.background = "var(--danger)";
+    } catch (err) {
+      alert("Microphone access denied or not supported.");
+    }
+  } else {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+    }
+    isRecording = false;
+    recordBtn.innerText = "🎙️ Record Audio";
+    recordBtn.style.background = "var(--primary)";
+  }
+}
+
+function groupByDate(entriesList) {
+  const groups = {};
+  entriesList.forEach(e => {
+    const date = e.timestamp.split('|')[0].trim();
+    if (!groups[date]) groups[date] = [];
+    groups[date].push(e);
+  });
+  return groups;
+}
+
+function renderDiary() {
+  try {
+    const container = document.getElementById('diaryContainer');
+    const query = document.getElementById('searchInput').value.toLowerCase();
+    container.innerHTML = '';
+
+    const filteredEntries = entries.filter(e => {
+      if (!query) return true;
+      if (e.type === 'text') return e.data.toLowerCase().includes(query);
+      return false;
+    });
+
+    if (filteredEntries.length === 0) {
+      container.innerHTML = '<p style="color: var(--subtext); text-align: center;">No entries found.</p>';
+      return;
+    }
+
+    const grouped = groupByDate(filteredEntries);
+
+    for (const [date, dateEntries] of Object.entries(grouped)) {
+      const groupHeader = document.createElement('div');
+      groupHeader.className = 'date-group-title';
+      groupHeader.innerText = date;
+      container.appendChild(groupHeader);
+
+      dateEntries.forEach((entry) => {
+        const item = document.createElement('div');
+        item.className = 'timeline-entry';
+
+        let contentHTML = '';
+        if (entry.type === 'text') {
+          contentHTML = `<p style="margin:0;">${escapeHTML(entry.data)}</p>`;
+        } else if (entry.type === 'image') {
+          contentHTML = `<img src="${entry.data}" alt="Diary photo">`;
+        } else if (entry.type === 'audio') {
+          contentHTML = `<audio controls src="${entry.data}"></audio>`;
+        }
+
+        const timeOnly = entry.timestamp.split('|')[1] ? entry.timestamp.split('|')[1].trim() : entry.timestamp;
+
+        item.innerHTML = `
+          <div class="entry-header">
+            <span class="timestamp">${escapeHTML(timeOnly)}</span>
+            <button class="delete-btn" data-id="${entry.id}">✕ Delete</button>
+          </div>
+          <div class="entry-content">${contentHTML}</div>
+        `;
+
+        item.querySelector('.delete-btn').addEventListener('click', () => deleteEntry(entry.id));
+
+        container.appendChild(item);
+
+        const hr = document.createElement('hr');
+        hr.className = 'separator';
+        container.appendChild(hr);
+      });
+    }
+  } catch (e) {
+    console.error('Render error:', e);
+    document.getElementById('diaryContainer').innerHTML =
+      '<p style="color: var(--danger); text-align: center;">Error loading diary entries.</p>';
+  }
+}
+
+function dataURLtoBlob(dataURL) {
+  const parts = dataURL.split(',');
+  const mimeMatch = parts[0].match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : '';
+  const binary = atob(parts[1]);
+  const arr = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+function extensionForMime(mime) {
+  if (mime.includes('png')) return 'png';
+  if (mime.includes('webm')) return 'webm';
+  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+  if (mime.includes('gif')) return 'gif';
+  return 'bin';
+}
+
+async function buildZipBlob() {
+  const zip = new JSZip();
+  const mediaFolder = zip.folder("media");
+  const exportDate = getTimestamp();
+
+  let entriesHTML = '';
+
+  entries.forEach((entry, i) => {
+    let mediaTag = '';
+
+    if (entry.type === 'text') {
+      mediaTag = `<p>${escapeHTML(entry.data)}</p>`;
+    } else if (entry.type === 'image') {
+      const blob = dataURLtoBlob(entry.data);
+      const ext = extensionForMime(blob.type);
+      const fileName = `image_${i}_${entry.id}.${ext}`;
+      mediaFolder.file(fileName, blob);
+      mediaTag = `<img src="media/${fileName}" alt="Photo">`;
+    } else if (entry.type === 'audio') {
+      const blob = dataURLtoBlob(entry.data);
+      const ext = extensionForMime(blob.type);
+      const fileName = `audio_${i}_${entry.id}.${ext}`;
+      mediaFolder.file(fileName, blob);
+      mediaTag = `<audio controls src="media/${fileName}"></audio>`;
+    }
+
+    entriesHTML += `
+      <div class="entry">
+        <div class="time">${escapeHTML(entry.timestamp)}</div>
+        ${mediaTag}
+      </div>
+      <hr>
+    `;
+  });
+
+  const fullHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Exported Field Diary</title>
+<style>
+body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 30px auto; padding: 0 15px; color: #222; }
+h2 { margin-bottom: 4px; }
+.meta { font-size: 0.85em; color: #666; margin-bottom: 24px; }
+.entry { margin-bottom: 15px; }
+.time { font-size: 0.8em; color: #475569; font-weight: bold; margin-bottom: 6px; }
+img { max-width: 100%; border-radius: 6px; }
+audio { width: 100%; }
+hr { border: 0; height: 1px; background: #e2e8f0; margin: 20px 0; }
+</style>
+</head>
+<body>
+<h2>Field Diary Log</h2>
+<div class="meta">Exported on: ${exportDate} | Total Entries: ${entries.length}</div>
+<hr>
+${entriesHTML}
+</body>
+</html>`;
+
+  zip.file("index.html", fullHTML);
+
+  return zip.generateAsync({ type: "blob" });
+}
+
+async function exportZip() {
+  if (entries.length === 0) {
+    alert("Diary is empty!");
+    return;
+  }
+
+  const btn = document.getElementById('exportBtn');
+  const originalText = btn.innerText;
+  btn.innerText = '⏳ Exporting...';
+  btn.disabled = true;
+
+  try {
+    const content = await buildZipBlob();
+    const fileName = `Diary_Export_${Date.now()}.zip`;
+    const file = new File([content], fileName, { type: 'application/zip' });
+
+    // If the device supports sharing files directly (typical once back
+    // online / near other people), offer the native share sheet so it can
+    // go straight to WhatsApp, Drive, email etc. Otherwise fall back to
+    // a plain download the user can move manually.
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: 'Field Diary Export',
+          text: 'Field diary export'
+        });
+        btn.innerText = originalText;
+        btn.disabled = false;
+        return;
+      } catch (shareErr) {
+        // User cancelled the share sheet, or it failed — fall through to download.
+      }
+    }
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(content);
+    a.download = fileName;
+    a.click();
+  } catch (err) {
+    alert("Failed to export ZIP file.");
+    console.error(err);
+  } finally {
+    btn.innerText = originalText;
+    btn.disabled = false;
+  }
+}
+
+function updateConnectionStatus() {
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  if (navigator.onLine) {
+    dot.classList.add('online');
+    text.innerText = 'Online';
+  } else {
+    dot.classList.remove('online');
+    text.innerText = 'Offline — entries save locally, export/share once you have signal';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadFromStorage();
+  renderDiary();
+  updateConnectionStatus();
+
+  document.getElementById('addTextBtn').addEventListener('click', addTextNote);
+  document.getElementById('imageInput').addEventListener('change', addPhoto);
+  document.getElementById('recordBtn').addEventListener('click', toggleAudioRecording);
+  document.getElementById('exportBtn').addEventListener('click', exportZip);
+
+  document.getElementById('noteInput').addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter') {
+      addTextNote();
+    }
+  });
+
+  document.getElementById('noteInput').addEventListener('input', updateCharCount);
+  document.getElementById('searchInput').addEventListener('input', renderDiary);
+
+  window.addEventListener('online', updateConnectionStatus);
+  window.addEventListener('offline', updateConnectionStatus);
+
+  // Install-to-homescreen prompt (Android/Chrome). iOS has no programmatic
+  // prompt; users add via Share > Add to Home Screen instead.
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    document.getElementById('installBtn').style.display = 'inline-flex';
+  });
+
+  document.getElementById('installBtn').addEventListener('click', async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    document.getElementById('installBtn').style.display = 'none';
+  });
+
+  window.addEventListener('appinstalled', () => {
+    document.getElementById('installBtn').style.display = 'none';
+  });
+
+  // Register the service worker so the app shell (and JSZip) is cached
+  // for full offline use after the first successful load.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch((err) => {
+      console.error('Service worker registration failed:', err);
+    });
+  }
+});
+</script>
+</body>
+</html>
